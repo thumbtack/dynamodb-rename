@@ -62,12 +62,9 @@ type appConfig struct {
 	writeWorkers      int
 	readQps           int64
 	writeQps          int64
-	// TODO: check names
-	resume      bool
-	keepStream  bool
-	force       bool
-	createTable bool
-	verbose     bool
+	createDst         bool
+	enableStream      bool
+	verbose           bool
 	// used to walk through the lineage of shards to ensure ordering
 	// a child shard can only be processed after the parent is done
 	completedShards    map[string]bool
@@ -111,14 +108,8 @@ func parseFlags() *appConfig {
 		defaultWriteQps,
 		"Maximum queries per second on write operations",
 	)
-	flag.BoolVar(
-		&cfg.resume,
-		"resume",
-		false,
-		"Resume streaming replication from an existing stream. Do not copy older data",
-	)
-	flag.BoolVar(&cfg.keepStream, "keep", false, "Do not disable the stream on quit")
-	flag.BoolVar(&cfg.force, "force", false, "Copy all data. If a stream is enabled, re-use it")
+	flag.BoolVar(&cfg.createDst, "create-dst", false, "Create the destination table, if it does not exist")
+	flag.BoolVar(&cfg.enableStream, "enable-stream", false, "Enable the stream, if disabled")
 	flag.BoolVar(&cfg.verbose, "verbose", false, "Print verbose log messages")
 
 	flag.Parse()
@@ -151,6 +142,7 @@ func backoff(i int, caller string) {
 	time.Sleep(time.Duration(wait) * time.Millisecond)
 }
 
+// TODO: create the destination table if it does not exist and cfg.createDst is true
 // make sure both tables exist and have the same schema
 func validateTables(app *appConfig) error {
 	var err error
@@ -382,41 +374,44 @@ func currentStreamArn(cfg *appConfig) string {
 	return ""
 }
 
-func setupStream(cfg *appConfig) (string, error) {
-	log.Printf("Setting up DynamoDB stream on %s...\n", cfg.table[src])
-	// make sure we don't proceed if a stream already exists unless we're resuming operations
+func getStreamArn(cfg *appConfig) (string, error) {
 	arn := currentStreamArn(cfg)
+
 	if arn != "" {
-		if cfg.resume || cfg.force {
-			verbose(cfg, "Resuming with stream %s", arn)
-			return arn, nil
+		if cfg.enableStream {
+			// make sure we're not asking to a enable a stream when one already exists
+			return "", errors.New("DynamoDB stream already enabled: " + arn)
 		} else {
-			return "", errors.New(fmt.Sprintf("Table %s already has a stream enabled", cfg.table[src]))
+			// already enabled, we're good
+			verbose(cfg, "Found enabled stream %s", arn)
+			return arn, nil
 		}
 	}
 
-	input := &dynamodb.UpdateTableInput{
-		TableName: aws.String(cfg.table[src]),
-		StreamSpecification: &dynamodb.StreamSpecification{
-			StreamEnabled:  aws.Bool(true),
-			StreamViewType: aws.String(dynamodbstreams.StreamViewTypeNewImage),
-		},
+	// enable a stream
+	if cfg.enableStream {
+		log.Printf("Enabling DynamoDB stream on %s...\n", cfg.table[src])
+		input := &dynamodb.UpdateTableInput{
+			TableName: aws.String(cfg.table[src]),
+			StreamSpecification: &dynamodb.StreamSpecification{
+				StreamEnabled:  aws.Bool(true),
+				StreamViewType: aws.String(dynamodbstreams.StreamViewTypeNewImage),
+			},
+		}
+
+		result, err := cfg.dynamo[src].UpdateTable(input)
+		if err != nil {
+			return "", err
+		}
+
+		verbose(cfg, "DynamoDB stream enabled: %s", *result.TableDescription.LatestStreamArn)
+		return *result.TableDescription.LatestStreamArn, nil
 	}
 
-	result, err := cfg.dynamo[src].UpdateTable(input)
-	if err != nil {
-		return "", err
-	}
-
-	verbose(cfg, "DynamoDB stream created: %s", *result.TableDescription.LatestStreamArn)
-	return *result.TableDescription.LatestStreamArn, nil
+	return "", errors.New("DynamoDB stream not enabled")
 }
 
 func disableStream(cfg *appConfig) error {
-	if cfg.keepStream {
-		return nil
-	}
-
 	log.Println("Disabling DynamoDB stream...")
 	input := &dynamodb.UpdateTableInput{
 		TableName: aws.String(cfg.table[src]),
@@ -626,6 +621,19 @@ func replayStream(streamArn string, cfg *appConfig) error {
 	return nil
 }
 
+func cleanup(sigs chan os.Signal, cfg *appConfig) {
+	sig := <-sigs
+	log.Printf("Received signal: %v", sig)
+	if cfg.enableStream {
+		err := disableStream(cfg)
+		if err != nil {
+			log.Printf("Failed to disable stream: %s\n", err)
+		}
+	}
+	log.Println("Bye!")
+	os.Exit(0)
+}
+
 func main() {
 	// parse and check command line arguments
 	cfg := parseFlags()
@@ -644,7 +652,7 @@ func main() {
 	// enable the stream before starting the copy process so that once that's done
 	// we can replay all the data inserted/modified in the meantime and continuing
 	//
-	streamARN, err := setupStream(cfg)
+	streamARN, err := getStreamArn(cfg)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -653,26 +661,16 @@ func main() {
 	log.Println("Preparing signal handler...")
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		sig := <-sigs
-		log.Printf("Received signal: %v", sig)
-		err := disableStream(cfg)
-		if err != nil {
-			log.Printf("Failed to disable stream: %s\n", err)
-		}
-		log.Println("Bye!")
-		os.Exit(0)
-	}()
+	go cleanup(sigs, cfg)
 
-	if !cfg.resume || cfg.force {
-		// copy the data
-		err = copyTable(cfg)
-		// if copying the data failed, should just stop here
-		if err != nil {
-			// TODO: only if we set it up
+	// copy the data
+	err = copyTable(cfg)
+	// if copying the data failed, should just stop here
+	if err != nil {
+		if cfg.enableStream {
 			disableStream(cfg)
-			log.Fatalln(err)
 		}
+		log.Fatalln(err)
 	}
 
 	// we're done copying the data, it's safe to replay the stream
