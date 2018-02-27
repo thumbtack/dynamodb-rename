@@ -621,15 +621,20 @@ func replayStream(streamArn string, cfg *appConfig) error {
 	return nil
 }
 
-func cleanup(sigs chan os.Signal, cfg *appConfig) {
+func cleanup(cfg *appConfig) {
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+
 	sig := <-sigs
 	log.Printf("Received signal: %v", sig)
+
 	if cfg.enableStream {
 		err := disableStream(cfg)
 		if err != nil {
 			log.Printf("Failed to disable stream: %s\n", err)
 		}
 	}
+
 	log.Println("Bye!")
 	os.Exit(0)
 }
@@ -659,17 +664,13 @@ func main() {
 
 	// make sure we clean up the best we can when interrupted, namely that the stream is disabled
 	log.Println("Preparing signal handler...")
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-	go cleanup(sigs, cfg)
+	go cleanup(cfg)
 
 	// copy the data
 	err = copyTable(cfg)
 	// if copying the data failed, should just stop here
 	if err != nil {
-		if cfg.enableStream {
-			disableStream(cfg)
-		}
+		cleanup(cfg)
 		log.Fatalln(err)
 	}
 
