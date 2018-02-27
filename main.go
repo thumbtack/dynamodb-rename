@@ -68,19 +68,20 @@ type appConfig struct {
 	force       bool
 	createTable bool
 	verbose     bool
+	// used to walk through the lineage of shards to ensure ordering
+	// a child shard can only be processed after the parent is done
+	completedShards    map[string]bool
+	completedShardLock sync.RWMutex
+	// keep track of shards for which a goroutine was already spawned
+	activeShardProcessors     map[string]bool
+	activeShardProcessorsLock sync.RWMutex
 }
 
-// used to walk through the lineage of shards to ensure ordering
-// a child shard can only be processed after the parent is done
-var globalCompletedShards map[string]bool = make(map[string]bool)
-var globalCompletedShardLock sync.RWMutex
-
-// used to keep track of shards for which a goroutine was already spawned
-var globalActiveShardProcessors map[string]bool = make(map[string]bool)
-var globalActiveShardProcessorsLock sync.RWMutex
-
 func parseFlags() *appConfig {
-	cfg := &appConfig{}
+	cfg := &appConfig{
+		completedShards:       make(map[string]bool),
+		activeShardProcessors: make(map[string]bool),
+	}
 
 	flag.StringVar(&cfg.region[src], "src-region", "us-east-1", "AWS region the source lives in")
 	flag.StringVar(&cfg.region[dst], "dst-region", "us-east-1", "AWS region the destination lives in")
@@ -432,19 +433,18 @@ func disableStream(cfg *appConfig) error {
 	return err
 }
 
-// TODO: move from global to cfg
-func isShardCompleted(shardId *string) bool {
-	globalCompletedShardLock.RLock()
-	_, ok := globalCompletedShards[*shardId]
-	globalCompletedShardLock.RUnlock()
+func isShardCompleted(shardId *string, cfg *appConfig) bool {
+	cfg.completedShardLock.RLock()
+	_, ok := cfg.completedShards[*shardId]
+	cfg.completedShardLock.RUnlock()
 
 	return ok
 }
 
-func markShardCompleted(shardId *string) {
-	globalCompletedShardLock.Lock()
-	globalCompletedShards[*shardId] = true
-	globalCompletedShardLock.Unlock()
+func markShardCompleted(shardId *string, cfg *appConfig) {
+	cfg.completedShardLock.Lock()
+	cfg.completedShards[*shardId] = true
+	cfg.completedShardLock.Unlock()
 }
 
 func insertRecord(item map[string]*dynamodb.AttributeValue, cfg *appConfig) error {
@@ -519,7 +519,7 @@ func replayShard(shard *dynamodbstreams.Shard, streamArn string, cfg *appConfig)
 
 	// do not start until the parent is done
 	if shard.ParentShardId != nil {
-		for !isShardCompleted(shard.ParentShardId) {
+		for !isShardCompleted(shard.ParentShardId, cfg) {
 			verbose(cfg, "Shard %s waiting for parent %s to complete", *shard.ShardId, *shard.ParentShardId)
 			time.Sleep(time.Duration(shardWaitForParentIntervalSeconds) * time.Second)
 		}
@@ -567,7 +567,7 @@ func replayShard(shard *dynamodbstreams.Shard, streamArn string, cfg *appConfig)
 	}
 
 	// we're done
-	markShardCompleted(shard.ShardId)
+	markShardCompleted(shard.ShardId, cfg)
 	verbose(cfg, "Completed shard %s", *shard.ShardId)
 }
 
@@ -599,16 +599,16 @@ func replayStream(streamArn string, cfg *appConfig) error {
 
 		// launch one goroutine for each *new* shard
 		for _, shard := range result.StreamDescription.Shards {
-			globalActiveShardProcessorsLock.Lock()
-			_, ok := globalActiveShardProcessors[*shard.ShardId]
+			cfg.activeShardProcessorsLock.Lock()
+			_, ok := cfg.activeShardProcessors[*shard.ShardId]
 			if !ok {
 				verbose(cfg, "Starting processor for shard %s", *shard.ShardId)
 				go replayShard(shard, streamArn, cfg)
-				globalActiveShardProcessors[*shard.ShardId] = true
+				cfg.activeShardProcessors[*shard.ShardId] = true
 			} else {
 				verbose(cfg, "Shard %s is already being processed", *shard.ShardId)
 			}
-			globalActiveShardProcessorsLock.Unlock()
+			cfg.activeShardProcessorsLock.Unlock()
 		}
 
 		if result.StreamDescription.LastEvaluatedShardId != nil {
