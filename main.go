@@ -56,6 +56,7 @@ const (
 type appConfig struct {
 	table             [2]string
 	region            [2]string
+	endpoint          [2]string
 	dynamo            [2]*dynamodb.DynamoDB
 	stream            *dynamodbstreams.DynamoDBStreams
 	maxConnectRetries int
@@ -176,16 +177,25 @@ func validateTables(app *appConfig) error {
 func connect(cfg *appConfig) {
 	cfg.dynamo[src] = dynamodb.New(session.Must(
 		session.NewSession(
-			aws.NewConfig().WithRegion(cfg.region[src]).WithMaxRetries(cfg.maxConnectRetries),
+			aws.NewConfig().
+				WithRegion(cfg.region[src]).
+				WithEndpoint(cfg.endpoint[src]).
+				WithMaxRetries(cfg.maxConnectRetries),
 		)))
 	cfg.dynamo[dst] = dynamodb.New(session.Must(
 		session.NewSession(
-			aws.NewConfig().WithRegion(cfg.region[dst]).WithMaxRetries(cfg.maxConnectRetries),
+			aws.NewConfig().
+				WithRegion(cfg.region[dst]).
+				WithEndpoint(cfg.endpoint[dst]).
+				WithMaxRetries(cfg.maxConnectRetries),
 		)))
 	// streams client -- source table only
 	cfg.stream = dynamodbstreams.New(session.Must(
 		session.NewSession(
-			aws.NewConfig().WithRegion(cfg.region[dst]).WithMaxRetries(cfg.maxConnectRetries),
+			aws.NewConfig().
+				WithRegion(cfg.region[src]).
+				WithEndpoint(cfg.endpoint[src]).
+				WithMaxRetries(cfg.maxConnectRetries),
 		)))
 }
 
