@@ -165,6 +165,21 @@ func validateTables(cfg *appConfig) error {
 						WriteCapacityUnits: output[src].Table.ProvisionedThroughput.WriteCapacityUnits,
 					},
 				})
+				if err != nil {
+					return err
+				}
+
+				// wait for the table to be created
+				status := ""
+				for status != "ACTIVE" {
+					response, _ := cfg.dynamo[t].DescribeTable(&dynamodb.DescribeTableInput{
+						TableName: aws.String(cfg.table[dst]),
+					})
+					status = *response.Table.TableStatus
+					log.Println("Waiting for destination table to be created")
+					time.Sleep(1 * time.Second)
+				}
+
 				return err
 			}
 
