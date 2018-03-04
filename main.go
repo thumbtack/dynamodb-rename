@@ -143,20 +143,32 @@ func backoff(i int, caller string) {
 	time.Sleep(time.Duration(wait) * time.Millisecond)
 }
 
-// TODO: create the destination table if it does not exist and cfg.createDst is true
 // make sure both tables exist and have the same schema
-func validateTables(app *appConfig) error {
+func validateTables(cfg *appConfig) error {
 	var err error
 	output := make([]*dynamodb.DescribeTableOutput, 2)
 
 	for _, t := range []int{src, dst} {
-		input := &dynamodb.DescribeTableInput{
-			TableName: aws.String(app.table[t]),
-		}
-
-		output[t], err = app.dynamo[t].DescribeTable(input)
+		output[t], err = cfg.dynamo[t].DescribeTable(&dynamodb.DescribeTableInput{
+			TableName: aws.String(cfg.table[t]),
+		})
 		if err != nil {
-			return errors.New(fmt.Sprintf("Failed to describe table %s: %s\n", app.table[t], err.(awserr.Error)))
+			// if the destination table does not exist *and* we were asked to create it
+			if t == dst && cfg.createDst {
+				log.Println("Creating destination table")
+				_, err := cfg.dynamo[dst].CreateTable(&dynamodb.CreateTableInput{
+					TableName:            aws.String(cfg.table[dst]),
+					KeySchema:            output[src].Table.KeySchema,
+					AttributeDefinitions: output[src].Table.AttributeDefinitions,
+					ProvisionedThroughput: &dynamodb.ProvisionedThroughput{
+						ReadCapacityUnits:  output[src].Table.ProvisionedThroughput.ReadCapacityUnits,
+						WriteCapacityUnits: output[src].Table.ProvisionedThroughput.WriteCapacityUnits,
+					},
+				})
+				return err
+			}
+
+			return errors.New(fmt.Sprintf("Failed to describe table %s: %s\n", cfg.table[t], err.(awserr.Error)))
 		}
 	}
 
@@ -164,9 +176,9 @@ func validateTables(app *appConfig) error {
 		reflect.DeepEqual(output[src].Table.KeySchema, output[dst].Table.KeySchema)) {
 		msg := fmt.Sprintf(
 			"Schema mismatch:\n**%s**\n%v\n**%s**\n%v\n",
-			app.table[src],
+			cfg.table[src],
 			output[src],
-			app.table[dst],
+			cfg.table[dst],
 			output[dst])
 		return errors.New(msg)
 	}
