@@ -275,7 +275,7 @@ func writeTable(
 		// create groups of 25 items -- max batch size
 		for _, item := range items {
 			requestSize := len(writeRequest[cfg.table[dst]])
-			if (requestSize%maxBatchSize) == 0 && requestSize > 0 {
+			if requestSize == maxBatchSize {
 				rl.Acquire(maxBatchSize)
 				err := writeBatch(writeRequest, cfg)
 				if err != nil {
@@ -283,7 +283,14 @@ func writeTable(
 				} else {
 					verbose(cfg, "Write worker %d successfully wrote %d items", id, requestSize)
 				}
-				writeRequest = make(map[string][]*dynamodb.WriteRequest, 0)
+				// let's not forget the current item which is not part of the previous batch and
+				// won't be included in the next
+				writeRequest[cfg.table[dst]] = []*dynamodb.WriteRequest{
+					{
+						PutRequest: &dynamodb.PutRequest{
+							Item: item,
+						},
+					}}
 			} else {
 				writeRequest[cfg.table[dst]] = append(writeRequest[cfg.table[dst]], &dynamodb.WriteRequest{
 					PutRequest: &dynamodb.PutRequest{
@@ -295,13 +302,14 @@ func writeTable(
 		// maybe len(items) % maxBatchSize != 0 and there is still something to process
 		requestSize := len(writeRequest[cfg.table[dst]])
 		if requestSize > 0 {
-			rl.Acquire(maxBatchSize)
+			rl.Acquire(int64(requestSize))
 			err := writeBatch(writeRequest, cfg)
 			if err != nil {
 				log.Println("Failed to write batch:", err)
 			} else {
 				verbose(cfg, "Write worker %d successfully wrote %d items", id, requestSize)
 			}
+			writeRequest = make(map[string][]*dynamodb.WriteRequest, 0)
 		}
 	}
 }
