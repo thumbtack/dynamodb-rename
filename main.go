@@ -710,8 +710,7 @@ func main() {
 	}
 
 	// enable the stream before starting the copy process so that once that's done
-	// we can replay all the data inserted/modified in the meantime and continuing
-	//
+	// we can replay all the data inserted/modified in the meantime
 	streamARN, err := getStreamArn(cfg)
 	if err != nil {
 		log.Fatalln(err)
