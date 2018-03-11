@@ -232,16 +232,26 @@ func writeBatch(
 ) error {
 	var err error
 
-	for i := 0; i < cfg.maxConnectRetries; i++ {
-		_, err = cfg.dynamo[dst].BatchWriteItem(
-			&dynamodb.BatchWriteItemInput{
-				RequestItems: batch,
-			},
-		)
-		if err != nil {
-			backoff(i, "BatchWrite")
-		} else {
-			return nil
+	for len(batch) > 0 {
+		for i := 0; i < cfg.maxConnectRetries; i++ {
+			output, err := cfg.dynamo[dst].BatchWriteItem(
+				&dynamodb.BatchWriteItemInput{
+					RequestItems: batch,
+				},
+			)
+			if err != nil {
+				backoff(i, "BatchWrite")
+			} else {
+				// re-submit requests that were not processed
+				n := len(output.UnprocessedItems[cfg.table[dst]])
+				if n > 0 {
+					verbose(cfg, "Unprocessed items: %d\n", n)
+					batch = output.UnprocessedItems
+				} else {
+					// we're all done
+					return nil
+				}
+			}
 		}
 	}
 

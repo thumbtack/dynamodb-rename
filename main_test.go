@@ -63,7 +63,7 @@ func setupTest(cfg *appConfig, t *testing.T) {
 	}
 
 	// write some initial data to the source table
-	for i := 0; i < 50; i++ {
+	for i := 0; i < 500; i++ {
 		input := &dynamodb.PutItemInput{
 			TableName: aws.String(cfg.table[src]),
 			Item: map[string]*dynamodb.AttributeValue{
@@ -122,9 +122,13 @@ func sourceInDestination(source int, destination int, cfg *appConfig, t *testing
 					TableName: aws.String(cfg.table[destination]),
 					Key:       item,
 				}
-				_, err := cfg.dynamo[destination].GetItem(input)
+				output, err := cfg.dynamo[destination].GetItem(input)
 				if err != nil {
-					t.Fatal("Did not find item:", item)
+					t.Fatal(err)
+				}
+
+				if len(output.Item) <= 0 {
+					t.Fatal("Item not found:", item)
 				}
 			}
 		}
