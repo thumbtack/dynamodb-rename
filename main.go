@@ -45,6 +45,7 @@ const (
 	src                               = 0
 	dst                               = 1
 	defaultConnectRetries             = 3
+	defaultReadWorkers                = 4
 	defaultWriteWorkers               = 5
 	defaultReadQps                    = 10
 	defaultWriteQps                   = 5
@@ -60,6 +61,7 @@ type appConfig struct {
 	dynamo            [2]*dynamodb.DynamoDB
 	stream            *dynamodbstreams.DynamoDBStreams
 	maxConnectRetries int
+	readWorkers       int
 	writeWorkers      int
 	readQps           int64
 	writeQps          int64
@@ -90,6 +92,12 @@ func parseFlags() *appConfig {
 		"max-retries",
 		defaultConnectRetries,
 		"Maximum number of retries (with exponential backoff)",
+	)
+	flag.IntVar(
+		&cfg.readWorkers,
+		"read-workers",
+		defaultReadWorkers,
+		"Number of concurrent workers reading from the source table",
 	)
 	flag.IntVar(
 		&cfg.writeWorkers,
@@ -326,8 +334,12 @@ func writeTable(
 
 func readTable(
 	itemsChan chan<- []map[string]*dynamodb.AttributeValue,
+	wg *sync.WaitGroup,
 	cfg *appConfig,
-) error {
+	id int,
+) {
+	defer wg.Done()
+
 	lastEvaluatedKey := make(map[string]*dynamodb.AttributeValue, 0)
 	rl := ratelimiter.New(cfg.readQps)
 	rl.Debug(cfg.verbose)
@@ -336,6 +348,8 @@ func readTable(
 		input := &dynamodb.ScanInput{
 			TableName:      aws.String(cfg.table[src]),
 			ConsistentRead: aws.Bool(true),
+			Segment:        aws.Int64(int64(id)),
+			TotalSegments:  aws.Int64(int64(cfg.readWorkers)),
 		}
 		// include the last key we received (if any) to resume scanning
 		if len(lastEvaluatedKey) > 0 {
@@ -362,35 +376,37 @@ func readTable(
 			if len(lastEvaluatedKey) == 0 {
 				// we're done
 				verbose(cfg, "Scan: finished")
-				return nil
+				return
 			}
 		} else {
-			return errors.New(fmt.Sprintf("Scan: failed after %d attempts\n", cfg.maxConnectRetries))
+			log.Printf("Scan: failed after %d attempts\n", cfg.maxConnectRetries)
 		}
 	}
 }
 
 func copyTable(cfg *appConfig) error {
 	log.Printf("Copying data from %s to %s...\n", cfg.table[src], cfg.table[dst])
-	var wg sync.WaitGroup
+	var writerWG sync.WaitGroup
+	var readerWG sync.WaitGroup
 	// create a channel to send items from source -> destination
 	items := make(chan []map[string]*dynamodb.AttributeValue)
 	// launch a pool of workers to write to the destination table (pulling from the channel)
-	wg.Add(cfg.writeWorkers)
+	writerWG.Add(cfg.writeWorkers)
 	for i := 0; i < cfg.writeWorkers; i++ {
 		verbose(cfg, "Starting write worker %d", i)
-		go writeTable(items, &wg, cfg, i)
+		go writeTable(items, &writerWG, cfg, i)
 	}
-	// scan the source table and put each resulting list of items in the channel
-	err := readTable(items, cfg)
+	// launch a pool of workers to scan the source table and put each resulting list of items in the channel
+	readerWG.Add(cfg.readWorkers)
+	for i := 0; i < cfg.readWorkers; i++ {
+		verbose(cfg, "Starting read worker %d", i)
+		go readTable(items, &readerWG, cfg, i)
+	}
+	readerWG.Wait()
 	// nothing else will be added to the channel
 	close(items)
-	// if scanning the table failed, there's no point on waiting for the writes to finish
-	if err != nil {
-		return err
-	}
 	// wait for everything to be written
-	wg.Wait()
+	writerWG.Wait()
 	// all good
 	log.Println("Finished data copy")
 	return nil

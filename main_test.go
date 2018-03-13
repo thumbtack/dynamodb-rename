@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"strconv"
 	"testing"
 	"time"
@@ -140,7 +141,7 @@ func sourceInDestination(source int, destination int, cfg *appConfig, t *testing
 }
 
 func continuousWrite(quit <-chan bool, cfg *appConfig, t *testing.T) {
-	i := 100
+	i := 500
 
 	for {
 		select {
@@ -171,6 +172,7 @@ func TestAll(t *testing.T) {
 		endpoint:              [2]string{localEndpoint, localEndpoint},
 		maxConnectRetries:     3,
 		writeWorkers:          5,
+		readWorkers:           4,
 		readQps:               1000,
 		writeQps:              1000,
 		completedShards:       make(map[string]bool),
@@ -191,7 +193,10 @@ func TestAll(t *testing.T) {
 	quit := make(chan bool)
 	go continuousWrite(quit, cfg, t)
 	// copy the contents of src -> dst
-	copyTable(cfg)
+	err = copyTable(cfg)
+	if err != nil {
+		log.Println("Failed to copy table:", err)
+	}
 	// run this one in the background so that we don't block forever
 	go replayStream(streamARN, cfg)
 	// give it some time so that the background process writes a few more elements
