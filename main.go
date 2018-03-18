@@ -294,7 +294,7 @@ func writeTable(
 		for _, item := range items {
 			requestSize := len(writeRequest[cfg.table[dst]])
 			if requestSize == maxBatchSize {
-				rl.Acquire(maxBatchSize)
+				rl.Acquire("", maxBatchSize)
 				err := writeBatch(writeRequest, cfg)
 				if err != nil {
 					log.Println("Failed to write batch:", err)
@@ -320,7 +320,7 @@ func writeTable(
 		// maybe len(items) % maxBatchSize != 0 and there is still something to process
 		requestSize := len(writeRequest[cfg.table[dst]])
 		if requestSize > 0 {
-			rl.Acquire(int64(requestSize))
+			rl.Acquire("", int64(requestSize))
 			err := writeBatch(writeRequest, cfg)
 			if err != nil {
 				log.Println("Failed to write batch:", err)
@@ -358,7 +358,7 @@ func readTable(
 
 		successfulScan := false
 		for i := 0; i < cfg.maxConnectRetries; i++ {
-			rl.Acquire(1)
+			rl.Acquire("", 1)
 			result, err := cfg.dynamo[src].Scan(input)
 			if err != nil {
 				backoff(i, "Scan")
