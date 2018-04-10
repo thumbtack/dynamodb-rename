@@ -16,7 +16,7 @@ operation *and* continuously propagating changes in near real time.
 It can also optionally create the destination table and/or enable a stream on 
 the source table.  
 
-A client-side [rate limiter](https://github.com/marcoalmeida/ratelimiter) is used
+A client-side [rate limiter](https://github.com/thumbtack/goratelimit) is used
 to control (independently) read and write workloads.
 
 ## Example
