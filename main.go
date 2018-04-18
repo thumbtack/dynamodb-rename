@@ -275,7 +275,7 @@ func writeTable(
 ) {
 	defer wg.Done()
 
-	rl := ratelimiter.New(cfg.writeQps)
+	rl := goratelimit.New(cfg.writeQps)
 	rl.Debug(cfg.verbose)
 	writeRequest := make(map[string][]*dynamodb.WriteRequest, 0)
 
@@ -337,7 +337,7 @@ func readTable(
 	defer wg.Done()
 
 	lastEvaluatedKey := make(map[string]*dynamodb.AttributeValue, 0)
-	rl := ratelimiter.New(cfg.readQps)
+	rl := goratelimit.New(cfg.readQps)
 	rl.Debug(cfg.verbose)
 
 	for {
