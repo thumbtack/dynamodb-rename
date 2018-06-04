@@ -255,6 +255,7 @@ func writeBatch(
 					// we're all done
 					return nil
 				}
+				break
 			}
 		}
 	}
@@ -519,7 +520,7 @@ func insertRecord(item map[string]*dynamodb.AttributeValue, cfg *appConfig) erro
 
 	for i := 0; i < cfg.maxConnectRetries; i++ {
 		_, err = cfg.dynamo[dst].PutItem(input)
-		if err == nil {
+		if err != nil {
 			return nil
 		} else {
 			backoff(i, "PutItem")
@@ -601,6 +602,8 @@ func replayShard(shard *dynamodbstreams.Shard, streamArn string, cfg *appConfig)
 			} else {
 				backoff(i, "GetShardIterator")
 			}
+		} else {
+			break
 		}
 	}
 
@@ -617,6 +620,8 @@ func replayShard(shard *dynamodbstreams.Shard, streamArn string, cfg *appConfig)
 				} else {
 					backoff(i, "GetRecords")
 				}
+			} else {
+				break
 			}
 		}
 		// absence of records does not mean we're done with the shard, but
@@ -656,6 +661,8 @@ func replayStream(streamArn string, cfg *appConfig) error {
 				} else {
 					backoff(i, "DescribeStream")
 				}
+			} else {
+				break
 			}
 		}
 
