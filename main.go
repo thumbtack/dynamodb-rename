@@ -602,7 +602,6 @@ func replayShard(shard *dynamodbstreams.Shard, streamArn string, cfg *appConfig)
 				backoff(i, "GetShardIterator")
 			}
 		}
-
 	}
 
 	shardIterator := iterator.ShardIterator
@@ -644,6 +643,7 @@ func replayStream(streamArn string, cfg *appConfig) error {
 			StreamArn: aws.String(streamArn),
 			Limit:     aws.Int64(100),
 		}
+
 		if lastEvaluatedShardId != "" {
 			input.ExclusiveStartShardId = aws.String(lastEvaluatedShardId)
 		}
